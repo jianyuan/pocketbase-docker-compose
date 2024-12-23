@@ -1,0 +1,40 @@
+name: Update PocketBase Version
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  components:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: latest
+        name: Get latest PocketBase version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag_name="$(gh release view -R pocketbase/pocketbase --json tagName --jq '.tagName')"
+          if [ -z "$tag_name" ]; then
+            echo "Error: tag_name is empty"
+            exit 1
+          fi
+          echo "tag_name=$tag_name" >> $GITHUB_OUTPUT
+      - name: Update Dockerfile.pocketbase with latest PocketBase version
+        run: |
+          latest_version=$(echo "${{ steps.latest.outputs.tag_name }}" | sed 's/^v//')
+          sed -i "s/^ARG PB_VERSION=.*/ARG PB_VERSION=${latest_version}/" Dockerfile.pocketbase
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: update-pocketbase-version
+          commit-message: "chore(deps): Update PocketBase version to ${{ steps.latest.outputs.tag_name }}"
+          title: "chore(deps): Update PocketBase version to ${{ steps.latest.outputs.tag_name }}"
+          body: |
+            Update PocketBase version to ${{ steps.latest.outputs.tag_name }}.
