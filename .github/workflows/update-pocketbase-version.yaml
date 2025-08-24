@@ -30,6 +30,7 @@ jobs:
           latest_version=$(echo "${{ steps.latest.outputs.tag_name }}" | sed 's/^v//')
           sed -i "s/^ARG PB_VERSION=.*/ARG PB_VERSION=${latest_version}/" Dockerfile.pocketbase
       - name: Create Pull Request
+        id: cpr
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -38,3 +39,7 @@ jobs:
           title: "chore(deps): Update PocketBase version to ${{ steps.latest.outputs.tag_name }}"
           body: |
             Update PocketBase version to ${{ steps.latest.outputs.tag_name }}.
+      - name: Enable Pull Request Automerge
+        run: gh pr merge --merge --auto "${{ steps.cpr.outputs.pull-request-number }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
