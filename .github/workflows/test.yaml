@@ -30,27 +30,6 @@ jobs:
       - if: always()
         run: docker compose down --volumes
 
-  build:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - linux/amd64
-          - linux/arm64
-          - linux/arm/v7
-    steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/build-push-action@v7
-        with:
-          file: Dockerfile.pocketbase
-          platforms: ${{ matrix.platform }}
-          load: true
-          tags: pocketbase:test
-      - run: docker run --rm --platform ${{ matrix.platform }} pocketbase:test /pb/pocketbase --version
-
   release-zips:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
@@ -61,11 +40,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { target: linux_amd64, runner: ubuntu-latest }
-          - { target: linux_arm64, runner: ubuntu-24.04-arm }
-          - { target: linux_armv7, runner: ubuntu-latest, platform: linux/arm/v7 }
-          - { target: linux_ppc64le, runner: ubuntu-latest, platform: linux/ppc64le }
-          - { target: linux_s390x, runner: ubuntu-latest, platform: linux/s390x }
+          - { target: linux_amd64, runner: ubuntu-latest, platform: linux/amd64 }
+          - { target: linux_arm64, runner: ubuntu-24.04-arm, platform: linux/arm64 }
+          - { target: linux_armv7, runner: ubuntu-latest, platform: linux/arm/v7, emulated: true }
+          - { target: linux_ppc64le, runner: ubuntu-latest, platform: linux/ppc64le, emulated: true }
+          - { target: linux_s390x, runner: ubuntu-latest, platform: linux/s390x, emulated: true }
           - { target: darwin_amd64, runner: macos-26-intel }
           - { target: darwin_arm64, runner: macos-latest }
           - { target: windows_amd64, runner: windows-latest, exe: .exe }
@@ -73,11 +52,26 @@ jobs:
     env:
       TARGET: ${{ matrix.target }}
       PLATFORM: ${{ matrix.platform }}
+      EMULATED: ${{ matrix.emulated }}
       EXE: ${{ matrix.exe }}
     steps:
       - uses: actions/checkout@v7
-      - if: matrix.platform
+      - if: matrix.emulated
         uses: docker/setup-qemu-action@v4
+
+      # Linux targets also build the Docker image for the same platform
+      - if: matrix.platform
+        uses: docker/setup-buildx-action@v4
+      - if: matrix.platform
+        uses: docker/build-push-action@v7
+        with:
+          file: Dockerfile.pocketbase
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: pocketbase:test
+      - if: matrix.platform
+        run: docker run --rm --platform ${{ matrix.platform }} pocketbase:test /pb/pocketbase --version
+
       # Test the release pinned in the Dockerfile: download, verify the checksum, unzip and run it
       - run: |
           set -euo pipefail
@@ -98,7 +92,7 @@ jobs:
           fi
           chmod +x "out/pocketbase$EXE"
 
-          if [ -n "$PLATFORM" ]; then
+          if [ -n "$EMULATED" ]; then
             output="$(docker run --rm --platform "$PLATFORM" --volume "$PWD/out:/pb:ro" alpine:3.24 /pb/pocketbase --version)"
           else
             output="$("./out/pocketbase$EXE" --version)"
