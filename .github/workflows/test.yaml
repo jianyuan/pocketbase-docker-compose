@@ -50,3 +50,58 @@ jobs:
           load: true
           tags: pocketbase:test
       - run: docker run --rm --platform ${{ matrix.platform }} pocketbase:test /pb/pocketbase --version
+
+  release-zips:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux_amd64, runner: ubuntu-latest }
+          - { target: linux_arm64, runner: ubuntu-24.04-arm }
+          - { target: linux_armv7, runner: ubuntu-latest, platform: linux/arm/v7 }
+          - { target: linux_ppc64le, runner: ubuntu-latest, platform: linux/ppc64le }
+          - { target: linux_s390x, runner: ubuntu-latest, platform: linux/s390x }
+          - { target: darwin_amd64, runner: macos-26-intel }
+          - { target: darwin_arm64, runner: macos-latest }
+          - { target: windows_amd64, runner: windows-latest, exe: .exe }
+          - { target: windows_arm64, runner: windows-11-arm, exe: .exe }
+    env:
+      TARGET: ${{ matrix.target }}
+      PLATFORM: ${{ matrix.platform }}
+      EXE: ${{ matrix.exe }}
+    steps:
+      - uses: actions/checkout@v7
+      - if: matrix.platform
+        uses: docker/setup-qemu-action@v4
+      # Test the release pinned in the Dockerfile: download, verify the checksum, unzip and run it
+      - run: |
+          set -euo pipefail
+          version="$(grep -m1 '^ARG PB_VERSION=' Dockerfile.pocketbase | cut -d= -f2)"
+          release_id="$(grep -m1 '^ARG PB_RELEASE_ID=' Dockerfile.pocketbase | cut -d= -f2)"
+          base="https://ganigeorgiev.com/api/files/releases/${release_id}"
+          zip="pocketbase_${version}_${TARGET}.zip"
+
+          curl -fsSLO "$base/$zip"
+          curl -fsSLO "$base/checksums.txt"
+          if command -v sha256sum >/dev/null; then sum=sha256sum; else sum="shasum -a 256"; fi
+          grep " $zip\$" checksums.txt | $sum -c -
+
+          if [ -n "$EXE" ]; then
+            pwsh -NoProfile -Command "Expand-Archive -Path '$zip' -DestinationPath out"
+          else
+            unzip -q "$zip" -d out
+          fi
+          chmod +x "out/pocketbase$EXE"
+
+          if [ -n "$PLATFORM" ]; then
+            output="$(docker run --rm --platform "$PLATFORM" --volume "$PWD/out:/pb:ro" alpine:3.24 /pb/pocketbase --version)"
+          else
+            output="$("./out/pocketbase$EXE" --version)"
+          fi
+          echo "$output"
+          case "$output" in *"$version"*) ;; *) echo "Error: expected version $version"; exit 1 ;; esac
