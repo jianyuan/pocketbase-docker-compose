@@ -1,4 +1,4 @@
-FROM alpine:latest
+FROM alpine:3.24
 
 ARG PB_VERSION=0.42.3
 ARG PB_RELEASE_ID=g6762h1kvtb6s2s
@@ -9,10 +9,17 @@ RUN apk add --no-cache \
     unzip \
     ca-certificates
 
-# Download PocketBase
-ADD https://ganigeorgiev.com/api/files/releases/${PB_RELEASE_ID}/pocketbase_${PB_VERSION}_${TARGETOS}_${TARGETARCH}.zip /tmp/pb.zip
-RUN unzip /tmp/pb.zip -d /pb/ && \
-    rm /tmp/pb.zip
+# Download PocketBase and verify it against the published checksums
+ADD https://ganigeorgiev.com/api/files/releases/${PB_RELEASE_ID}/pocketbase_${PB_VERSION}_${TARGETOS}_${TARGETARCH}.zip /tmp/
+ADD https://ganigeorgiev.com/api/files/releases/${PB_RELEASE_ID}/checksums.txt /tmp/
+RUN cd /tmp && \
+    grep " pocketbase_${PB_VERSION}_${TARGETOS}_${TARGETARCH}.zip\$" checksums.txt | sha256sum -c - && \
+    unzip pocketbase_*.zip -d /pb/ && \
+    rm /tmp/pocketbase_*.zip /tmp/checksums.txt
+
+# Run as a non-root user; compose can override the uid/gid to match the bind mounts
+RUN adduser -D -u 1000 pocketbase
+USER pocketbase
 
 EXPOSE 8090
 

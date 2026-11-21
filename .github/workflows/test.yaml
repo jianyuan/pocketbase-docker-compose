@@ -3,15 +3,29 @@ name: Test
 on:
   pull_request:
   push:
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # The container runs as a non-root user, so the bind mounts must be writable by it
+      - run: |
+          mkdir -p pb/data pb/public pb/hooks pb/migrations
+          echo "PB_UID=$(id -u)" >> "$GITHUB_ENV"
+          echo "PB_GID=$(id -g)" >> "$GITHUB_ENV"
       - run: docker compose up --detach --build
       - timeout-minutes: 1
         run: |
           until docker compose exec pocketbase wget --no-verbose --tries=1 --spider http://localhost:8090/api/health; do
             sleep 5
           done
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down --volumes
