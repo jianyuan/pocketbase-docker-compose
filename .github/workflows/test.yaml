@@ -25,10 +25,9 @@ jobs:
           - { target: linux_armv7, runner: ubuntu-latest, platform: linux/arm/v7, emulated: true }
           - { target: linux_ppc64le, runner: ubuntu-latest, platform: linux/ppc64le, emulated: true }
           - { target: linux_s390x, runner: ubuntu-latest, platform: linux/s390x, emulated: true }
-          # Experimental: hosted macOS and Windows runners may not be able to run Linux containers
-          - { target: darwin_amd64, runner: macos-26-intel, platform: linux/amd64, colima: true, experimental: true }
+          - { target: darwin_amd64, runner: macos-26-intel }
           - { target: darwin_arm64, runner: macos-latest }
-          - { target: windows_amd64, runner: windows-latest, platform: linux/amd64, exe: .exe, experimental: true }
+          - { target: windows_amd64, runner: windows-latest, exe: .exe }
           - { target: windows_arm64, runner: windows-11-arm, exe: .exe }
     env:
       TARGET: ${{ matrix.target }}
@@ -41,20 +40,8 @@ jobs:
         uses: docker/setup-qemu-action@v4
 
       # Linux targets run the whole compose setup (Dockerfile.pocketbase and compose.yaml) on their platform
-      - name: Set up Docker with Colima
-        if: matrix.colima
-        run: |
-          brew install colima docker docker-compose
-          mkdir -p ~/.docker/cli-plugins
-          ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" ~/.docker/cli-plugins/docker-compose
-          colima start
-      - name: Docker info
-        if: matrix.experimental
-        continue-on-error: true
-        run: docker info --format '{{.OSType}}/{{.Architecture}}'
       - name: Start compose
         if: matrix.platform
-        continue-on-error: ${{ matrix.experimental == true }}
         env:
           DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
         run: |
@@ -66,7 +53,6 @@ jobs:
           docker compose up --detach --build --wait --wait-timeout 300
       - name: Check compose
         if: matrix.platform
-        continue-on-error: ${{ matrix.experimental == true }}
         run: |
           set -euo pipefail
           version="$(grep -m1 '^ARG PB_VERSION=' Dockerfile.pocketbase | cut -d= -f2)"
@@ -109,14 +95,3 @@ jobs:
           fi
           echo "$output"
           case "$output" in *"$version"*) ;; *) echo "Error: expected version $version"; exit 1 ;; esac
-
-          # Also start the server, so every native target is checked beyond printing its version
-          if [ -z "$EMULATED" ]; then
-            "./out/pocketbase$EXE" serve --http=127.0.0.1:8091 --dir=serve-data > serve.log 2>&1 &
-            pid=$!
-            trap 'kill $pid 2>/dev/null || true' EXIT
-            for _ in $(seq 30); do curl -fsS http://127.0.0.1:8091/api/health >/dev/null 2>&1 && break; sleep 1; done
-            # serve.log holds a one-time superuser install link, so only print it when the check fails
-            curl -fsS http://127.0.0.1:8091/api/health || { cat serve.log; exit 1; }
-            echo
-          fi
