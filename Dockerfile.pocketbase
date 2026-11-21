@@ -1,13 +1,16 @@
 FROM alpine:latest
 
-ARG PB_VERSION=0.40.6
+ARG PB_VERSION=0.42.3
+ARG PB_RELEASE_ID=g6762h1kvtb6s2s
+ARG TARGETOS
+ARG TARGETARCH
 
 RUN apk add --no-cache \
     unzip \
     ca-certificates
 
 # Download PocketBase
-ADD https://github.com/pocketbase/pocketbase/releases/download/v${PB_VERSION}/pocketbase_${PB_VERSION}_linux_amd64.zip /tmp/pb.zip
+ADD https://ganigeorgiev.com/api/files/releases/${PB_RELEASE_ID}/pocketbase_${PB_VERSION}_${TARGETOS}_${TARGETARCH}.zip /tmp/pb.zip
 RUN unzip /tmp/pb.zip -d /pb/ && \
     rm /tmp/pb.zip
 
