@@ -11,21 +11,87 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux_amd64, runner: ubuntu-latest, platform: linux/amd64 }
+          - { target: linux_arm64, runner: ubuntu-24.04-arm, platform: linux/arm64 }
+          - { target: linux_armv7, runner: ubuntu-latest, platform: linux/arm/v7, emulated: true }
+          - { target: linux_ppc64le, runner: ubuntu-latest, platform: linux/ppc64le, emulated: true }
+          - { target: linux_s390x, runner: ubuntu-latest, platform: linux/s390x, emulated: true }
+          - { target: darwin_amd64, runner: macos-26-intel }
+          - { target: darwin_arm64, runner: macos-latest }
+          - { target: windows_amd64, runner: windows-latest, exe: .exe }
+          - { target: windows_arm64, runner: windows-11-arm, exe: .exe }
+    env:
+      TARGET: ${{ matrix.target }}
+      PLATFORM: ${{ matrix.platform }}
+      EMULATED: ${{ matrix.emulated }}
+      EXE: ${{ matrix.exe }}
     steps:
       - uses: actions/checkout@v7
-      # The container runs as a non-root user, so the bind mounts must be writable by it
-      - run: |
-          mkdir -p pb/data pb/public pb/hooks pb/migrations
-          echo "PB_UID=$(id -u)" >> "$GITHUB_ENV"
-          echo "PB_GID=$(id -g)" >> "$GITHUB_ENV"
-      - run: docker compose up --detach --build
-      - timeout-minutes: 1
+      - if: matrix.emulated
+        uses: docker/setup-qemu-action@v4
+
+      # Linux targets run the whole compose setup (Dockerfile.pocketbase and compose.yaml) on their platform
+      - name: Start compose
+        if: matrix.platform
+        env:
+          DOCKER_DEFAULT_PLATFORM: ${{ matrix.platform }}
         run: |
-          until docker compose exec pocketbase wget --no-verbose --tries=1 --spider http://localhost:8090/api/health; do
-            sleep 5
-          done
-      - if: failure()
+          # The container runs as a non-root user, so the bind mounts must be writable by it
+          mkdir -p pb/data pb/public pb/hooks pb/migrations
+          export PB_UID="$(id -u)" PB_GID="$(id -g)"
+          echo "PB_UID=$PB_UID" >> "$GITHUB_ENV"
+          echo "PB_GID=$PB_GID" >> "$GITHUB_ENV"
+          docker compose up --detach --build --wait --wait-timeout 300
+      - name: Check compose
+        if: matrix.platform
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^ARG PB_VERSION=' Dockerfile.pocketbase | cut -d= -f2)"
+          curl -fsS http://127.0.0.1:8090/api/health
+          docker compose exec -T pocketbase /pb/pocketbase --version | grep -F "$version"
+          [ "$(docker compose exec -T pocketbase id -u)" = "$PB_UID" ]
+          # The database is created through the bind mount, so it must be writable by the container
+          test -f pb/data/data.db
+      - name: Compose logs
+        if: failure() && matrix.platform
         run: docker compose logs
-      - if: always()
+      - name: Stop compose
+        if: always() && matrix.platform
         run: docker compose down --volumes
+
+      # Every target: download the release zip pinned in the Dockerfile, verify the checksum, unzip and run it
+      - run: |
+          set -euo pipefail
+          version="$(grep -m1 '^ARG PB_VERSION=' Dockerfile.pocketbase | cut -d= -f2)"
+          release_id="$(grep -m1 '^ARG PB_RELEASE_ID=' Dockerfile.pocketbase | cut -d= -f2)"
+          base="https://ganigeorgiev.com/api/files/releases/${release_id}"
+          zip="pocketbase_${version}_${TARGET}.zip"
+
+          curl -fsSLO "$base/$zip"
+          curl -fsSLO "$base/checksums.txt"
+          if command -v sha256sum >/dev/null; then sum=sha256sum; else sum="shasum -a 256"; fi
+          grep " $zip\$" checksums.txt | $sum -c -
+
+          if [ -n "$EXE" ]; then
+            pwsh -NoProfile -Command "Expand-Archive -Path '$zip' -DestinationPath out"
+          else
+            unzip -q "$zip" -d out
+          fi
+          chmod +x "out/pocketbase$EXE"
+
+          if [ -n "$EMULATED" ]; then
+            output="$(docker run --rm --platform "$PLATFORM" --volume "$PWD/out:/pb:ro" alpine:3.24 /pb/pocketbase --version)"
+          else
+            output="$("./out/pocketbase$EXE" --version)"
+          fi
+          echo "$output"
+          case "$output" in *"$version"*) ;; *) echo "Error: expected version $version"; exit 1 ;; esac
